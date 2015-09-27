@@ -1,0 +1,199 @@
+---
+title: "Regression analysis on mpg in mtcars dataset"
+output:
+  pdf_document:
+    fig_caption: no
+---
+```{r global_options, include = FALSE}
+  knitr::opts_chunk$set(
+    echo = FALSE,
+    warning = FALSE,
+    message = FALSE
+  )
+  options(scipen = 20, digits = 3)
+```
+## Executive summary
+```{r libraries}
+  library(ggplot2)
+  library(gridExtra)
+  library(vioplot)
+  library(corrplot)
+  data(mtcars)
+```
+We fit a linear model using multiple regression to (briefly) explore the relationship between mileage (mpg) and predictors in the `mtcars` dataset from Hocking (1976). We are interested especially in transmission effects. Our model uses weight and horsepower-to-weight ratio to explain mpg. It does not permit inference based on transmission. Higher mileage is strictly observed on auto transmission cars in the data, but weight is a major confounder.
+
+## Exploratory Analysis
+
+```{r example_mtcars_header}
+  mt <- mtcars
+  mt$cyl <- factor(mt$cyl)
+  mt$vs <- factor(mt$vs); levels(mt$vs) <- c("V Engine", "Straight Engine")
+  mt$am <- factor(mt$am); levels(mt$am) <- c("Automatic", "Manual")
+  mt$gear <- factor(mt$gear)
+  mt$carb <- factor(mt$carb)
+```
+
+`mtcars` is a complete motor vehicle dataset courtesy of Hocking (1976), assembled from 32 vehicles and comprised of numeric and factor variables.
+
+We observe highly disparate weight distributions based on transmission (Fig 2). In fact, multicollinearity occurs between many of the numeric variables (Fig. 3). There are no NA values in the data, and summary exploration of each variable does not reveal obvious or egregious errors in coding.
+
+## Ordinary least squares regression
+For mpg response $y_i$ we seek to fit a response using ordinary least squares regression of the form:
+
+$$y_i = \beta_0 + \sum_{k = 1}^{p} \beta_k x_{ki} + \epsilon_i$$
+
+Here $x_{ki}$ are regressors (predictors) of choice, $\beta_0, \beta_1, ... \beta_p$ are coefficients chosen to minimize residual squared error, and $\epsilon_i$ are error terms. Standard OLS regression assumptions apply. The regressors are not linearly related, and error terms are normal and heteroscedastic.
+
+We use R to perform OLS (in particular, the `lm` function). Full code is omitted for brevity, but present in the source .Rmd file (rendered to PDF via `knitr`).
+
+##  Model selection
+We seek a **parsimonious** model. Physically, we might expect `wt` (weight) and `hp` (horsepower) to be a promising start. The `mpg ~ wt` relationship looks quite reasonably linear (Fig. 1). Using both `wt` and `hp`, compared to only `wt`, raises adj. $R^2$ from `r summary(lm(mpg ~ wt, mt))$adj.r.squared` to `r summary(lm(mpg ~ wt + hp, mt))$adj.r.squared`. However, ANOVA analysis of the F ratio in comparison to `lm(mpg ~ wt * hp, mtcars)` has $p =$ `r anova(lm(mpg ~ wt + hp, mt), lm(mpg ~ wt * hp, mt))[2, "Pr(>F)"]` $< 0.05$; suggesting meaningful interaction.
+
+To more uniquely express power, [Henderson, Velleman](http://www.mortality.org/INdb/2008/02/12/8/document.pdf) (1981) proposes `hp/wt`. This is weakly correlated to wt (`cor` = `r cor(mt$hp/mt$wt, mt$wt)`), and ANOVA $p =$ `r anova(lm(mpg ~ wt + I(hp/wt), mt), lm(mpg ~ wt * I(hp/wt), mt))[2, "Pr(>F)"]` $> 0.05$, suggesting interaction may be ignored.
+
+We invite further model comparison based on residual sum of squares criteria:
+
+```{r model_compare}
+  fit1 <- lm(mpg ~ wt, mt)
+  fit2 <- lm(mpg ~ wt + I(hp/wt), mt)
+  fit3 <- lm(mpg ~ wt + I(hp/wt) + cyl, mt)
+  fit4 <- lm(mpg ~ wt + I(hp/wt) + disp, mt)
+  fit5 <- lm(mpg ~ wt + I(hp/wt) + am, mt)
+  fit6 <- lm(mpg ~ wt + I(hp/wt) + am + cyl + disp + drat +
+    qsec + vs + gear + carb, mt)
+
+  # proposed fit.
+  fit <- fit2
+
+  data.frame(
+    predictors = c(
+      "wt only",
+      "proposed",
+      "proposed + cyl",
+      "proposed + disp",
+      "proposed + am",
+      "proposed + (all remaining)"
+    ),
+    adj.R.squared = c(
+      summary(fit1)$adj.r.squared,
+      summary(fit2)$adj.r.squared,
+      summary(fit3)$adj.r.squared,
+      summary(fit4)$adj.r.squared,
+      summary(fit5)$adj.r.squared,
+      summary(fit6)$adj.r.squared
+    ),
+    "ANOVA p vs proposed" = c(
+      anova(fit1, fit2)[2, "Pr(>F)"],
+      "--",
+      anova(fit2, fit3)[2, "Pr(>F)"],
+      anova(fit2, fit4)[2, "Pr(>F)"],
+      anova(fit2, fit5)[2, "Pr(>F)"],
+      anova(fit2, fit6)[2, "Pr(>F)"]
+    )
+  )
+```  
+
+We observe the proposed model is superior to a `wt` only model, has high adjusted R squared, and no other compared models offer significant improvement. Cylinders comes close, but we appeal to parsimony and also to the strong relationship between cylinders and weight (Fig 2).
+
+## Residuals and diagnostics
+
+We perform a standard series of residuals diagnostics plots (Figs. 4 and 5) to evaluate the model fit and assumptions. The results are reasonable. We propose that vehicle selection, rather than model, are the source of leverage concerns.
+
+1. **Residuals vs Fitted** is modestly in the center, although not at the edges.
+1. **Normal QQ** plot shows that the residuals are fairly normal (except at edges), as assumed.
+1. **Scale-Location** plot shows fair homoscedasticity, as assumed (again departing most at edges).
+1. **Residuals vs Leverage** reveals a couple of points approaching Cook's distance and may have undue influence.
+1. **Hat values** plot, further illustrating degree of outsize influence of some observations.
+
+## Results, inference, and interpretation
+
+Our proposed model uses `wt` (units of 1000 lbs) and `hp/wt` as regressors.
+
+```{r fit_examine, echo = TRUE}
+   coef(summary(lm(mpg ~ wt + I(hp/wt), mtcars)))
+```  
+
+Both `wt` and `hp/wt` have a meaningful ($p < 0.05$) effect in the model on `mpg`. Controlling for `hp/wt`, a 1000-lb increase in `wt` is modeled to affect `mpg` by a quantity estimated with  95% confidence to be within the interval `r summary(lm(mpg ~ wt + I(hp/wt), mt))$coefficients[2, 1] + c(1, -1) *  qt(.975, df = fit$df) * summary(lm(mpg ~ wt + I(hp/wt), mt))$coefficients[2, 2]`. For an increase in hp-per-1000-lbs of 100, the 95% confidence interval (holding `wt` fixed) for the estimated effect on mpg is  `r 100 * summary(lm(mpg ~ wt + I(hp/wt), mt))$coefficients[3, 1] + c(100, -100) * qt(.975, df = fit$df) * summary(lm(mpg ~ wt + I(hp/wt), mt))$coefficients[3, 2]`. Heavier, and more overpowered cars are inferred to reduce mpg. (*n.b.* 95% CIs are obtained by `coeff +/- qt(.975, fit$df) * standard error`).
+
+## Automatic vs manual transmission
+Note that our linear model does not include transmission; its estimated effect has poor $p > 0.05$, and so inference from this estimation is not permissible.
+
+```{r am_model, echo = TRUE}
+   coef(summary(lm(mpg ~ wt + I(hp/wt) + factor(am), mtcars)))[4, ]
+```
+This is unsurprising; the two transmission groups have quite distinct weight makeup (Fig 2). A linear model using *only* transmission as a predictor is a poor fit ($R^2 =$ `r summary(lm(mpg ~ am, mt))$r.squared`). Weight is a strong predictor and has a strong relationship with transmission, and thus inference on transmission from this data is unlikely to be achieved.
+
+Mean difference is `r mean(mtcars[mtcars$am == 1, "mpg"]) - mean(mtcars[mtcars$am == 0, "mpg"])` MPG in favor of automatic cars, but this is solely from observed data,  not inference.
+
+## Appendix
+
+```{r exploratory_mpg_wt, fig.height = 3, fig.caption = "Fig.1"}
+  qplot(wt, mpg, data = mt, size = hp) +
+    geom_smooth(method = "loess")
+
+```
+
+$\hfill$ *Fig. 1*
+
+```{r exploratory_mpg_am, fig.height = 4, fig.caption = "Fig. 2"}
+  par(mfrow = c(1,2))
+  vioplot(
+    mtcars$wt[mtcars$am == 0],
+    mtcars$wt[mtcars$am == 1],
+    names = c("automatic", "manual"),
+    col = "#eeaacc"
+  )
+  title("mtcars: wt (1000 lbs) by am")
+  vioplot(
+    mtcars$wt[mtcars$cyl == 4],
+    mtcars$wt[mtcars$cyl == 6],
+    mtcars$wt[mtcars$cyl == 8],
+    names = c("4 cyl", "6 cyl", "8 cyl"),
+    col = "#88ccee"
+  )
+  title("mtcars: wt (1000 lbs) by cylinders")
+  par(mfrow = c(1,1))
+```
+
+$\vspace{0.5in}$
+
+$\hfill$ *Fig. 2*
+
+
+```{r corrplot, fig.height = 3, fig.caption = "Fig. 3"}
+  library(corrplot)
+  mt.numeric <- mt[, c("mpg", "disp", "hp", "drat", "wt", "qsec")]
+  corrplot(cor(mt.numeric), mar=c(0,0,1,0))
+  title("mtcars correlations (corrplot)")
+
+```
+
+$\hfill$ *Fig. 3*
+
+```{r hatvalues, fig.height = 4,  fig.caption = "Fig. 4"}
+  par(mfrow = c(1,1))
+  plot(hatvalues(fit))
+  title("Observation hat values in model fit")
+  abline(mean(hatvalues(fit1)), 0)
+  text(2, 0.02 + mean(hatvalues(fit1)), "mean", col = "#888888")
+  abline(mean(hatvalues(fit1) + sd(hatvalues(fit1))), 0, lty = 3)
+  text(3, 0.02 + mean(hatvalues(fit1)) + sd(hatvalues(fit1)), "mean + sd",
+    col = "#888888")
+  abline(mean(hatvalues(fit1) + 2 * sd(hatvalues(fit1))), 0, lty = 3)
+  text(3, 0.02 + mean(hatvalues(fit1)) + 2 * sd(hatvalues(fit1)), "mean + 2 sd",
+    col = "#888888")
+  abline(mean(hatvalues(fit1) + 3 * sd(hatvalues(fit1))), 0, lty = 3)
+  text(3, 0.02 + mean(hatvalues(fit1)) + 3 * sd(hatvalues(fit1)), "mean + 3 sd",
+      col = "#888888")
+
+```  
+$\vspace{0.5in}$
+$\hfill$ *Fig. 4*
+
+\section*{\centering{Residuals Diagnostics Plots}}
+```{r fit_plot, fig.height = 4,  fig.caption = "Fig. 5"}
+  par(mfrow=c(1,2))
+  plot(fit)  
+```  
+
+$\hfill$ *Fig. 5*
